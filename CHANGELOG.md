@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.90-dsh022.2 (2026-11-25)
+
+- Give each reverse MCP call a unique ID across bridge restarts so persisted PTC dispatches can be replayed.
+
 ## 0.6.90-dsh022.1 (2026-11-25)
 
 - Bind reverse MCP calls to the originating DSH model step, including PTC and conditional team tools. Report native execution errors to the caller.
