@@ -7,13 +7,8 @@ Each invariant below is enforced in code AND covered by a regression test.
 
 ## MCP reverse bridge (`src/host/mcp-bridge.ts`, `src/host/bridge.mjs`)
 
-- `/call` receives `exec.signal: AbortSignal` (never omitted) and `agent` only when
-  a real caller resolves from `x-dsh-session`; `agent` is omitted (undefined, never
-  `null`) otherwise. (tests: `test/mcp-bridge-registry-and-agent.test.ts`)
-- `mcpToolAllowlist` is enforced at EXECUTION time: a non-empty allowlist rejects
-  any `/call` for a tool outside it with **403 `tool not allowed`**. (test: `test/v02.test.ts`)
-- Internal-only tools `run_code`, `agy_ask`, `agy_tool` are excluded from BOTH
-  `/tools` and `/call` via one `INTERNAL_TOOL_NAMES` set. (test: `test/v02.test.ts`)
+- The installed reverse bridge requires a per-session route and a live DSH provider step. Its catalog uses the model-facing schemas for that step. Execution uses the originating agent, admitted tool set and cancellation signal.
+- `mcpToolAllowlist` further restricts both discovery and execution, including PTC inner tools. The PTC executor `run_code` is exposed when the host projects it. The recursive AGY helpers `agy_ask`, `agy_tool` and `agy_image` are excluded.
 - Distinct DSH names that normalize to the same MCP name are disambiguated with a
   stable `__<n>` suffix, never silently dropped; `bridge.mjs` calls back by exact
   `dshName`. (test: `test/v02.test.ts`)
@@ -193,7 +188,7 @@ so they are gated more strictly than the console routes:
 
 - 只给 `/call` 解析、`/tools` 不解析，会让**注册在 preset 内的工具**（`present`、`todo_write`、`job_*`、`schedule_*`、`office_*`）在列表里完全消失，即使已加入 `mcpToolAllowlist`——调用能成功、列表却看不见，属于最难排查的一类不一致。
 - 解析规则只有一处（`resolveSessionAgent()`）：先按原值查（裸子会话 key 不得改写），查不到且未带 `session-` 前缀时再试一次前缀形式。
-- **ACP 复用进程动态会话归属（issue #200）**：常驻 `agy acp` 子进程跨 DSH 会话复用时，`bridge.mjs` 环境变量里的 `DSH_MCP_SESSION` 停留在首个会话。每个 `AcpProcess` 启动时注入不可变进程标识 `DSH_MCP_PROC`，`bridge.mjs` 在 `/tools` 与 `/call` 上携带 `X-DSH-Proc`（并在 `tools/list` 时刷新工具目录）；宿主通过 `beginProcSessionTurn` / `resolveProcSession` 将该 ACP 进程当前活跃 turn（或刚结束 turn 的 `lastSessionKey`）映射到真实 DSH 会话，优先于静态 `X-DSH-Session`；进程退出时 `clearProcSessions()` 清理。CLI 一次性子进程不带 `X-DSH-Proc`，继续使用精确的 `X-DSH-Session`。
+- **ACP 归属**：启用反向桥的会话按独立路由划分 ACP 进程。工具请求通过 `X-DSH-Route` 绑定到当前模型步骤；步骤结束或被替换后即失效。
 - 锚点：`test/mcp-bridge-registry-and-agent.test.ts`（session 作用域列表、裸 key 重试、未知 session 回落 root、`X-DSH-Proc` 动态会话路由）。
 
 ## `--mode auto`、`--sandbox` 与斜杠命令写入边界

@@ -58,7 +58,7 @@ Resolution order (highest first): `DSH_AGY_*` environment variable → runtime o
 | --- | --- | --- | --- |
 | `contextWindowDefault` | `DSH_AGY_CONTEXT_WINDOW` | `1048576` | Context window advertised when agy does not report one |
 | `maxTokensDefault` | `DSH_AGY_MAX_TOKENS` | `65536` | Max output tokens advertised when agy does not report one |
-| `forwardSystemPrompt` | `—` | `false` | Forward the DSH system prompt to agy |
+| `forwardSystemPrompt` | `—` | `true` | Forward the DSH system prompt to agy |
 | `digestMaxChars` | `—` | `8000` | Budget for the history digest sent each turn |
 | `contextTransferMaxChars` | `—` | `660000` | Character cap for the transferred context block |
 | `contextTransferMaxBytes` | `—` | `150000` | Byte cap for the transferred context block |
@@ -167,7 +167,7 @@ Both are editable in **Settings → Antigravity** (in the `/atw Side Questions` 
 | `orchestratorPlannerEffort` | `DSH_AGY_ORCHESTRATOR_PLANNER_EFFORT` | `''` | Planner reasoning effort override for Orchestrator turns |
 | `orchestratorExecutorModel` | `DSH_AGY_ORCHESTRATOR_EXECUTOR_MODEL` | `''` | Executor model override passed via `--settings` when an Orchestrator model is active |
 | `orchestratorExecutorEffort` | `DSH_AGY_ORCHESTRATOR_EXECUTOR_EFFORT` | `''` | Executor reasoning effort override for Orchestrator turns |
-| `cloakSystemPrompt` | `DSH_AGY_CLOAK_SYSTEM_PROMPT` | `true` | Replace DSH-specific wording/paths in injected prompts with neutral Antigravity phrasing |
+| `cloakSystemPrompt` | `DSH_AGY_CLOAK_SYSTEM_PROMPT` | `false` | Replace DSH-specific wording/paths in injected prompts with neutral Antigravity phrasing |
 | `auxNeutralWorkspace` | `DSH_AGY_AUX_NEUTRAL_WORKSPACE` | `true` | Run auxiliary/side-channel turns (`btw`, translation, title, compaction) in a clean neutral cwd instead of leaking the user workspace |
 
 ## Client UI visibility (issue #105)

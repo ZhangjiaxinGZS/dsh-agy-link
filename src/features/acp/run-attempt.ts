@@ -35,7 +35,6 @@ import {
 } from '../../provider/quota-failover.ts'
 import { SubagentTracker } from '../subagent/tracker.ts'
 import type { AcpProcess } from './client.ts'
-import { beginProcSessionTurn } from './mcp-session.ts'
 import type { AcpSessionPool } from './pool.ts'
 import { acpPromptResultToAgyEvent, acpUpdateToAgyEvents, createAcpStreamState } from './protocol.ts'
 import { rebuildAcpSession } from './rebuild.ts'
@@ -393,6 +392,8 @@ export async function runAcpAttempt(
     ...(sessionKey === '' ? {} : { sessionId: sessionKey }),
     telemetryFlags: cfg.disableTelemetry,
   })
+  if (input.bridgeRoute) env.DSH_MCP_ROUTE = input.bridgeRoute
+  else delete env.DSH_MCP_ROUTE
 
   // Isolated accounts must authenticate from their OWN token file. If that
   // token is stale agy may fall back to the machine-wide keyring and silently
@@ -413,7 +414,6 @@ export async function runAcpAttempt(
   // being stolen (another agy refreshing it hourly), and retrying forever would
   // just burn the wrong account's quota.
   let identityRetried = false
-  let releaseProcSession: (() => void) | undefined
   for (;;) {
     try {
       proc = pool.acquireProcess({
@@ -430,8 +430,6 @@ export async function runAcpAttempt(
         ...(account?.dir && !account.systemHome ? { expectedIsolated: true } : {}),
         usesSharedSlot,
       })
-      releaseProcSession?.()
-      releaseProcSession = proc.mcpProcId && sessionKey !== '' ? beginProcSessionTurn(proc.mcpProcId, sessionKey) : undefined
       const resumeId = input.persistBinding ? input.binding?.conversationId : undefined
       // Returning to the original cwd preserves agy's system-prompt prefix and
       // keeps Google prompt cache hit rate high across turns.
@@ -453,8 +451,6 @@ export async function runAcpAttempt(
       }
       break
     } catch (err) {
-      releaseProcSession?.()
-      releaseProcSession = undefined
       const msg = err instanceof Error ? err.message : String(err)
       if (input.signal?.aborted) {
         return settleEarlyAbort(deps, input, slot, input.binding?.conversationId ?? null, msg)
@@ -479,7 +475,6 @@ export async function runAcpAttempt(
   }
 
   if (input.signal?.aborted) {
-    releaseProcSession?.()
     proc.cancelSession(sid)
     return settleEarlyAbort(deps, input, slot, sid, 'request aborted after ACP session opened')
   }
@@ -529,7 +524,6 @@ export async function runAcpAttempt(
     sessionStatus: openedStatus,
     onFirstOutput: () => settleGate('stream'),
   }).finally(() => {
-    releaseProcSession?.()
   })
   promptPromise.then(
     () => {

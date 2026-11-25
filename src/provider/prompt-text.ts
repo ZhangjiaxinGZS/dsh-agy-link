@@ -1,10 +1,5 @@
 // Pure prompt-text helpers: message flattening, harness-message sniffing,
 // image-ref collection, UTF-8 budget arithmetic and the ADR-7 history digest.
-//
-// These lived in src/host/adapter.ts next to the prompt-assembly block. They
-// are moved here verbatim (no behaviour change) so the prompt planner in
-// ./prompt.ts can use them without importing the adapter (which imports the
-// planner — that would be a cycle). The adapter re-exports them unchanged so
 // existing call sites and tests keep importing from the same module.
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -128,8 +123,15 @@ export function isAcpReportMessage(m: Message): boolean {
   return kind === ACP_REPORT_SOURCE_KIND
 }
 
+export function snapshotSource(message: Message): string | undefined {
+  const source = message.source as { kind?: string; form?: string; plugin?: string } | undefined
+  if (message.role !== 'user' || !source?.kind || source.kind === 'user') return
+  if (source.kind === 'runtime-context' || source.form === 'snapshot') return JSON.stringify([source.kind, source.plugin])
+}
+
 export function isSyntheticHarnessMessage(m: Message): boolean {
   if (isToolResultMessage(m)) return false
+  if (snapshotSource(m)) return true
   const src = (m as unknown as ForeignSource).source
   const kind = src?.kind
   if (kind !== undefined && kind !== '' && kind !== 'user') {
@@ -150,6 +152,7 @@ export function isSyntheticHarnessMessage(m: Message): boolean {
     // An ACP report is the agent's own narration of background work that
     // finished after the turn; dropping it would hide the outcome from a later
     // context rebuild (session reset / CLI fallback).
+    if (['agent-message', 'team-message', 'subagent-settled'].includes(kind.replace(/^plugin:/, ''))) return false
     if (kind === ACP_REPORT_SOURCE_KIND) return false
     // dsh-agy-link's own background wake carries instruction text the model must
     // act on, so it is never stripped as context noise.
@@ -526,8 +529,11 @@ export function buildDigest(
     // Binary tool output (e.g. a quoted .git blob) can carry NUL bytes; they
     // are illegal in argv and would kill the spawn before agy starts.
     const rawText = stripNulBytes(textOf(m))
-    const attNotes = budgetOpts.attachmentsByMessage?.get(m)
-    const attBlock = attNotes !== undefined && attNotes.length > 0 ? attNotes.join('\n') : ''
+    const media: MediaRefLike[] = []
+    if (m.role === 'user' && !isToolResultMessage(m)) collectMediaRefs(m, media)
+    const imageNotes = media.filter(ref => ref.mediaType.startsWith('image/')).map(ref =>
+      '[earlier image attachment: ' + JSON.stringify(ref.name ?? 'image') + ']')
+    const attBlock = [...imageNotes, ...(budgetOpts.attachmentsByMessage?.get(m) ?? [])].join('\n')
     const text = rawText !== '' && attBlock !== '' ? `${rawText}\n${attBlock}` : (rawText || attBlock)
     if (text === '') continue
     if (taskLine !== '' && !isToolResultMessage(m) && m.role === 'user' && rawText === taskText && attBlock === '') continue

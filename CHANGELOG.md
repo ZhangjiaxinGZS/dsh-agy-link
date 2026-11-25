@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.90-dsh022.1 (2026-11-25)
+
+- Bind reverse MCP calls to the originating DSH model step, including PTC and conditional team tools. Report native execution errors to the caller.
+- Separate concurrent session routes and refresh role instructions and context across warm turns and account handover. Keep pending teammate reports together and send historical images as text placeholders on replay.
+- See the [fork verification and installation notes](docs/DSH-022-FORK.md).
+
 ## 0.6.90 (2026-11-25)
 
 ### English

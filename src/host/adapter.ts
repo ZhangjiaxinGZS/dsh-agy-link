@@ -200,7 +200,6 @@ export class AgyAdapter extends LlmAdapter {
     }
   }
 
-  /** Build the agy argv for one call. Exported for tests. */
   buildArgs(opts: Parameters<typeof buildAgyArgs>[0]): string[] {
     return buildAgyArgs(opts)
   }
@@ -215,7 +214,7 @@ export class AgyAdapter extends LlmAdapter {
       }
     }
     yield* streamWithEffortRetry({
-      streamAttempt: (opts, suppressEffort) => this.streamAttempt(opts, suppressEffort),
+      streamAttempt: (opts, suppressEffort) => this.scopedAttempt(opts, suppressEffort),
       learnEffortUnsupported: (model) => this.learnEffortUnsupported(model),
       catalogAdvertisesEffort: (model) => this.deps.catalog.advertisedEfforts(model).length > 0,
       pool: this.deps.pool,
@@ -223,7 +222,13 @@ export class AgyAdapter extends LlmAdapter {
     }, effective)
   }
 
-  private async *streamAttempt(options: AgyGenerateOptions, suppressEffort = false): AsyncIterable<StreamChunk> {
+  private async *scopedAttempt(options: AgyGenerateOptions, suppressEffort: boolean) {
+    const step = this.deps.enterBridgeStep?.(options)
+    try { yield* this.streamAttempt(options, suppressEffort, step) }
+    finally { step?.close() }
+  }
+
+  private async *streamAttempt(options: AgyGenerateOptions, suppressEffort = false, lease?: import('../common/protocol.ts').BridgeLease): AsyncIterable<StreamChunk> {
     const ctx = resolveCallContext({
       options,
       cfg: this.deps.getConfig(),
@@ -270,6 +275,7 @@ export class AgyAdapter extends LlmAdapter {
       const deadNoResult = rec !== undefined && rec.isSettled && deadFailure === null && !rec.hasFinishableEventFrom(continuation.eventIndex + 1, mirrorLive)
       const deadRevivable = deadFailure !== null && isRevivableFailure(deadFailure.code)
       if (rec !== undefined && !deadNoResult && !deadRevivable && !(deadFailure !== null && this.claimFailover(sessionKey, deadFailure.code))) {
+        lease?.resume()
         yield* driveSpanImpl(this.deps, rec, continuation.eventIndex + 1, policy.mirrorTools && hasToolSupport, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal, undefined, false, sessionKey)
         return
       }
@@ -380,6 +386,7 @@ export class AgyAdapter extends LlmAdapter {
     }
 
     const plan = await buildPromptPlan({
+      bridgeServer: lease?.serverName,
       options,
       cfg,
       ctx,
@@ -414,11 +421,6 @@ export class AgyAdapter extends LlmAdapter {
     const newlySentImageIds = plan.newlySentImageIds
     const lastAssistantIdx = plan.lastAssistantIdx
 
-    // Intentionally no prompt-side "recovery boundary" injection: keyword
-    // matching on user text (missing/not found/enoent) false-positives and
-    // is a plugin-side prompt injection. Guidance for missing_file lives in
-    // /agy status via classifyToolError (commands.ts).
-
     // Session ownership: steer preemption + duplicate-submission debounce.
     //
     // - Identical prompt while a live run owns the session → BUSY. Never
@@ -448,6 +450,7 @@ export class AgyAdapter extends LlmAdapter {
             'duplicate-debounce rescue: identical prompt for a live agy run ' + liveRun.runId + ' — re-driving from event ' + rescueFrom + ' instead of throwing BUSY',
           )
           this.activeSessionPrompts.set(sessionKey, { prompt, startedAt: now, inFlight: true })
+          lease?.resume()
           yield* driveSpanImpl(this.deps, liveRun, rescueFrom, policy.mirrorTools && hasToolSupport, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal, undefined, false, sessionKey)
           return
         }
@@ -559,6 +562,7 @@ export class AgyAdapter extends LlmAdapter {
       ...(this.deps.reinstallCredentialSlot === undefined ? {} : { reinstallCredentialSlot: this.deps.reinstallCredentialSlot }),
     }
     const attemptInput: AttemptInput = {
+      bridgeRoute: lease?.bind(JSON.stringify([account?.id, permissionMode, options.agyTransport ?? cfg.transport, options.agySandbox ?? cfg.sandbox, options.agyAgent ?? cfg.agent])),
       cfg,
       bin,
       permissionMode: agyPermissionMode,
