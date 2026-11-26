@@ -15,6 +15,13 @@ let isScrolling = false;
 let scrollTimer: ReturnType<typeof setTimeout> | null = null;
 let listenerAttached = false;
 const settleListeners = new Set<() => void>();
+/**
+ * Listeners that must hear "the gesture ended" even while an overlay owns the
+ * screen. Scanners must NOT run then (they would mutate the conversation behind
+ * the overlay), but in-overlay work - e.g. delivering a status snapshot the poll
+ * deferred during the scroll - is exactly what should resume.
+ */
+const idleListeners = new Set<() => void>();
 
 // An overlay (the Antigravity console) can own the screen without the page
 // scrolling. While it is open we must ALSO stop the overlay scanners from
@@ -24,12 +31,35 @@ const settleListeners = new Set<() => void>();
 let overlaySuspended = false;
 let overlaySuspendRefs = 0;
 
+/**
+ * Publish "a scroll gesture is active" to CSS.
+ *
+ * Decorative animation (the quota shimmer, progress transitions) keeps the
+ * compositor repainting its subtree every frame; under a moving scroller with a
+ * rounded, shadowed panel that is the observable "scrolling the console flashes"
+ * symptom. The class lets global-css pause those effects for the duration of the
+ * gesture instead of asking every component to subscribe to scroll state.
+ */
+function syncScrollClass(active: boolean): void {
+	if (typeof document === 'undefined' || !document.documentElement) return;
+	try {
+		document.documentElement.classList.toggle('agy-scrolling', active);
+	} catch {
+		/* a host without classList must not break scrolling */
+	}
+}
+
 function onScrollActivity(): void {
 	isScrolling = true;
+	syncScrollClass(true);
 	if (scrollTimer !== null) clearTimeout(scrollTimer);
 	scrollTimer = setTimeout(() => {
 		isScrolling = false;
 		scrollTimer = null;
+		syncScrollClass(false);
+		for (const fn of idleListeners) {
+			try { fn(); } catch { /* ignore listener errors */ }
+		}
 		if (overlaySuspended || overlaySuspendRefs > 0) return;
 		for (const fn of settleListeners) {
 			try { fn(); } catch { /* ignore listener errors */ }
@@ -92,6 +122,7 @@ export function isInteractionLocked(): boolean {
 /** Set scroll active state explicitly (useful for testing or programmatic scrolls). */
 export function setScrollActiveForTest(active: boolean): void {
 	isScrolling = active;
+	syncScrollClass(active);
 }
 
 /** Register a callback to run once scrolling has settled. Returns an unregister function. */
@@ -100,6 +131,31 @@ export function onScrollSettle(fn: () => void): () => void {
 	settleListeners.add(fn);
 	return () => {
 		settleListeners.delete(fn);
+	};
+}
+
+/**
+ * Register a callback for "the scroll gesture has ended", fired regardless of
+ * whether an overlay is open. Use this for work that belongs to the OVERLAY
+ * itself; use `onScrollSettle` for conversation-DOM scanners.
+ */
+/** Run the end-of-gesture callbacks (test seam for the 150ms settle timer). */
+export function settleScrollForTest(): void {
+	syncScrollClass(false);
+	for (const fn of idleListeners) {
+		try { fn(); } catch { /* ignore listener errors */ }
+	}
+	if (overlaySuspended || overlaySuspendRefs > 0) return;
+	for (const fn of settleListeners) {
+		try { fn(); } catch { /* ignore listener errors */ }
+	}
+}
+
+export function onScrollIdle(fn: () => void): () => void {
+	ensureScrollListener();
+	idleListeners.add(fn);
+	return () => {
+		idleListeners.delete(fn);
 	};
 }
 
@@ -120,7 +176,9 @@ export function disposeScrollListener(): void {
 		scrollTimer = null;
 	}
 	settleListeners.clear();
+	idleListeners.clear();
 	isScrolling = false;
+	syncScrollClass(false);
 	overlaySuspended = false;
 	overlaySuspendRefs = 0;
 }

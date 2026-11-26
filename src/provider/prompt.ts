@@ -179,7 +179,7 @@ export async function buildPromptPlan(input: PromptPlanInput): Promise<PromptPla
       const snapshots = new Map<string, string>()
       for (const message of messages) {
         const source = snapshotSource(message)
-        if (source) snapshots.set(source, textOf(message))
+        if (source) snapshots.set(source, cloakPromptText(textOf(message), cfg.cloakSystemPrompt))
       }
       if (snapshots.size) sections.push('Current DSH context (supersedes previous snapshots):\n' + [...snapshots.values()].join('\n\n'))
     }

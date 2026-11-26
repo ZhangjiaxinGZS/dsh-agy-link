@@ -4,7 +4,8 @@
 import { diagnoseBridge, type BridgeDiagnostic } from '../common/bridge-tools.ts'
 import { homedir } from 'node:os'
 import { LlmAdapter, LlmError, type GenerateOptions, type LlmModelInfo, type LlmProviderInfo, type LlmResolvedModelInfo, type StreamChunk } from '@deepseek-ai/dsh-llm'
-import type { AgyGenerateOptions } from '../common/protocol.ts'
+import { withBridgeStep } from './bridge-steps.ts'
+import type { AgyGenerateOptions, BridgeLease } from '../common/protocol.ts'
 import { resolveCallContext, effectivePermissionMode } from '../provider/call-context.ts'
 import { purposePolicy } from '../provider/purpose-policy.ts'
 import { driveSpan as driveSpanImpl } from '../provider/span.ts'
@@ -18,6 +19,9 @@ export { calcPromptTokens, mergeSentImageIds } from '../provider/finalize.ts'
 import { selectSessionAccount } from '../provider/account-selection.ts'
 import { buildPromptPlan } from '../provider/prompt.ts'
 import { extractLeadingAgySlash, formatWithLeadingAgySlash } from '../provider/leading-slash.ts'
+import { INTERRUPTION_NOTICE, hasNewHumanTask, promptIdentity } from '../provider/prompt-identity.ts'
+import { warnOnce } from '../provider/warn-once.ts'
+export { hasNewHumanTask } from '../provider/prompt-identity.ts'
 import { buildAgyArgs, resolveAttemptOverrides, waitForRunSettle, type AttemptDeps, type AttemptInput } from '../provider/attempt.ts'
 import { runAgyAttempt } from '../provider/attempt-outcome.ts'
 export { STATUS_NOTICE_BLOCK_INDEX, awaitWithNotices } from '../provider/notices.ts'
@@ -46,11 +50,7 @@ export class AgyAdapter extends LlmAdapter {
   private readonly warnedKeys = new Set<string>()
   /** sessionKey -> in-flight run, for steer-time preemption. */
   private readonly activeRuns = new Map<string, RunRecording>()
-  /**
-   * sessionKey -> prompt info for duplicate submission debounce.
-   * `inFlight` is true from submit until the run settles (or spawn throws),
-   * so a settled failure can never wall a legitimate retry.
-   */
+  /** sessionKey -> canonical prompt + in-flight flag for duplicate debounce/steer. */
   private readonly activeSessionPrompts = new Map<string, { prompt: string; startedAt: number; inFlight: boolean }>()
   /** accountId -> timestamp of last spawn for spacing throttling */
   private readonly lastAccountSpawnTime = new Map<string, number>()
@@ -98,13 +98,7 @@ export class AgyAdapter extends LlmAdapter {
   }
 
   private warnOnce(key: string, msg: string): void {
-    if (this.warnedKeys.has(key)) return
-    if (this.warnedKeys.size >= 512) {
-      const oldest = this.warnedKeys.values().next().value
-      if (oldest !== undefined) this.warnedKeys.delete(oldest)
-    }
-    this.warnedKeys.add(key)
-    this.deps.log?.('WARNING: ' + msg)
+    warnOnce(this.warnedKeys, key, msg, this.deps.log)
   }
 
   private noteNetworkFailure(sessionKey: string): number {
@@ -137,7 +131,7 @@ export class AgyAdapter extends LlmAdapter {
   private clearInFlightPrompt(sessionKey: string, prompt: string): void {
     if (sessionKey === '') return
     const ap = this.activeSessionPrompts.get(sessionKey)
-    if (ap === undefined || ap.prompt !== prompt) return
+    if (ap === undefined || ap.prompt !== promptIdentity(prompt)) return
     this.activeSessionPrompts.set(sessionKey, { ...ap, inFlight: false })
   }
 
@@ -214,7 +208,11 @@ export class AgyAdapter extends LlmAdapter {
       }
     }
     yield* streamWithEffortRetry({
-      streamAttempt: (opts, suppressEffort) => this.scopedAttempt(opts, suppressEffort),
+      streamAttempt: (opts, suppressEffort) => {
+        const cfg = this.deps.getConfig()
+        return withBridgeStep(cfg.mcpBridge ? this.deps.enterBridgeStep?.(opts) : undefined,
+          lease => this.streamAttempt(opts, cfg, suppressEffort, lease))
+      },
       learnEffortUnsupported: (model) => this.learnEffortUnsupported(model),
       catalogAdvertisesEffort: (model) => this.deps.catalog.advertisedEfforts(model).length > 0,
       pool: this.deps.pool,
@@ -222,28 +220,17 @@ export class AgyAdapter extends LlmAdapter {
     }, effective)
   }
 
-  private async *scopedAttempt(options: AgyGenerateOptions, suppressEffort: boolean) {
-    const cfg = this.deps.getConfig()
-    const step = cfg.mcpBridge ? this.deps.enterBridgeStep?.(options) : undefined
-    try { yield* this.streamAttempt(options, cfg, suppressEffort, step) }
-    finally { step?.close() }
-  }
-
-  private async *streamAttempt(options: AgyGenerateOptions, cfg: PluginConfig, suppressEffort: boolean, lease?: import('../common/protocol.ts').BridgeLease): AsyncIterable<StreamChunk> {
+  private async *streamAttempt(options: AgyGenerateOptions, cfg: PluginConfig, suppressEffort: boolean, lease?: BridgeLease): AsyncIterable<StreamChunk> {
     const ctx = resolveCallContext({
       options, cfg,
       bin: this.deps.bin(),
-      ...(this.deps.sessionCwd === undefined
-        ? {}
-        : { sessionCwd: (id: string) => this.deps.sessionCwd?.(id) }),
+      ...(this.deps.sessionCwd === undefined ? {} : { sessionCwd: (id: string) => this.deps.sessionCwd?.(id) }),
       warnOnce: (key: string, message: string) => this.warnOnce(key, message),
     })
     const { bin, isReview, isTitle, isCompaction, isTranslate, isImage, isAux } = ctx
     const { permissionMode, sessionKey, workspaceRoot, isCodeMode, hasToolSupport } = ctx
     if (!isAux) this.bridgeDiagnostic = diagnoseBridge(cfg, options.tools, (key, msg) => this.warnOnce(key, msg))
     const policy = purposePolicy(ctx)
-    // Keep the local alias: TypeScript's aliased-condition narrowing makes
-    // `else if (isTranslateSession)` narrow `translateSession` below.
     const translateSession = ctx.translateSession
     const isTranslateSession = translateSession !== null
     // DSH synthetic lifecycle continuations: short-circuit on goal completion
@@ -441,22 +428,34 @@ export class AgyAdapter extends LlmAdapter {
       }
       const prevPrompt = this.activeSessionPrompts.get(sessionKey)
       const liveRun = this.activeRuns.get(sessionKey)
-      const runLive = liveRun !== undefined && !liveRun.isSettled
-      const samePrompt = prevPrompt !== undefined && prevPrompt.prompt === prompt
+      const runLive = liveRun !== undefined && !liveRun.isSettled && !liveRun.isAbortRequested
+      // Compare the CANONICAL prompt: the interruption notice injected below is transport metadata
+      // and used to poison the stored baseline, so continuation replays used to look like steers.
+      // (issue #205).
+      const identity = promptIdentity(prompt)
+      // A harness lifecycle hop (tool result / context append, no new typed
+      // turn) is never a steer: it is a continuation of the live run. Treat it
+      // as the same request so the rescue below resumes the cut span instead of
+      // aborting the run that produced it (issue #205).
+      const lifecycleHop = !hasNewHumanTask(messages)
+      const samePrompt = prevPrompt !== undefined && (prevPrompt.prompt === identity || lifecycleHop)
       if (runLive && samePrompt) {
         // Rescue an identical prompt if the live run already cut a span instead of failing BUSY.
         const rescueFrom = liveRun.lastCutIndex !== null ? liveRun.lastCutIndex + 1 : null
         if (rescueFrom !== null) {
           this.deps.log?.(
-            'duplicate-debounce rescue: identical prompt for a live agy run ' + liveRun.runId + ' — re-driving from event ' + rescueFrom + ' instead of throwing BUSY',
+            (lifecycleHop ? 'lifecycle-continuation rescue: no new human turn for live agy run ' : 'duplicate-debounce rescue: identical prompt for a live agy run ')
+              + liveRun.runId + ' — re-driving from event ' + rescueFrom + ' instead of throwing BUSY',
           )
-          this.activeSessionPrompts.set(sessionKey, { prompt, startedAt: now, inFlight: true })
+          this.activeSessionPrompts.set(sessionKey, { prompt: identity, startedAt: now, inFlight: true })
           lease?.resume()
           yield* driveSpanImpl(this.deps, liveRun, rescueFrom, policy.mirrorTools && hasToolSupport, isCodeMode, goalContext, supportsGoalUpdate, supportsPlanExit, options.signal, undefined, false, sessionKey)
           return
         }
         throw new LlmError(
-          'Duplicate request ignored: an identical request is already running for this session.',
+          lifecycleHop
+            ? 'Duplicate request ignored: a harness continuation arrived while the same request is still running for this session.'
+            : 'Duplicate request ignored: an identical request is already running for this session.',
           Err.BUSY,
         )
       }
@@ -505,6 +504,7 @@ export class AgyAdapter extends LlmAdapter {
               binding.interrupted = true
             }
           }
+          liveRun.markAbortRequested()
           liveRun.requestAbort?.()
           const exited = await waitForRunSettle(liveRun, 3_500)
           if (!exited) {
@@ -513,14 +513,14 @@ export class AgyAdapter extends LlmAdapter {
               'the preempted agy run did not exit within 3.5s — starting the replacement anyway; its late write-back is ignored because the newer run owns the session',
             )
           }
-          if (!wasConsumable && !prompt.includes('the previous turn was interrupted')) {
-            const notice = '[the previous turn was interrupted before it finished — do not continue or answer that unfinished work; respond only to the newest request below]'
+          if (!wasConsumable && !prompt.includes(INTERRUPTION_NOTICE)) {
             const slash = extractLeadingAgySlash(prompt)
-            prompt = slash ? formatWithLeadingAgySlash(slash, notice) : `${notice}\n\n${prompt}`
+            prompt = slash ? formatWithLeadingAgySlash(slash, INTERRUPTION_NOTICE) : `${INTERRUPTION_NOTICE}\n\n${prompt}`
           }
         }
       }
-      this.activeSessionPrompts.set(sessionKey, { prompt, startedAt: now, inFlight: true })
+      if (liveRun !== undefined && !liveRun.isSettled && liveRun.isAbortRequested) await waitForRunSettle(liveRun, 1_500)
+      this.activeSessionPrompts.set(sessionKey, { prompt: identity, startedAt: now, inFlight: true })
     }
 
     // Dispatch to attempt-outcome.ts. Inject private state callbacks so adapter owns activeRuns/failover.

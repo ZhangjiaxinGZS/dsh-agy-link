@@ -1,15 +1,15 @@
 # DSH 0.2.2-rc.5 适配与验收
 
-本地候选包为 `dsh-agy-link-0.6.90-dsh022.2.tgz`，基于上游 0.6.90。适合需要使用 AGY 多账号、同时在角色团队里调用 DSH 工具的用户。
+本地候选包为 `dsh-agy-link-0.6.96-dsh022.1.tgz`，基于上游 0.6.96（a2e68fa）。适合需要使用 AGY 多账号、同时在角色团队里调用 DSH 工具的用户。
 
 ## 选择与安装
 
 1. 先在独立 DSH profile 中试用。要接入正式端，先记录当前 profile 的插件启用状态和模型选择。
-2. 对目标 profile 安装本地包，例如 `dsh plugin --profile web add "$HOME/.dsh-role-team/packages/dsh-agy-link-0.6.90-dsh022.2.tgz"`。Desktop 选择其对应的 profile。通过插件管理确认启用 dsh-agy-link，在其宿主配置中设置 `mcpBridge: true` 后重启该宿主。
+2. 对目标 profile 安装本地包，例如 `dsh plugin --profile web add "$HOME/.dsh/local-bundles/dsh-agy-link-0.6.96-dsh022.1.tgz"`。Desktop 选择其对应的 profile。通过插件管理确认启用 dsh-agy-link，在其宿主配置中设置 `mcpBridge: true` 后重启该宿主。
 3. 在设置中选择 Antigravity 提供方的模型。角色设定透传采用默认值 `forwardSystemPrompt: true` 与 `cloakSystemPrompt: false`。已有自定义配置会继续生效。模型调用 DSH 工具仍需遵守当前会话的宿主权限、审批与工具准入。
 4. 正式切换时在同一 profile 中只启用一个提供相同 Antigravity 模型的适配器。可先停用旧适配器，保留其包和配置以便回退。回退时停用 Link 并重新启用原适配器，再选择原模型。两个插件间的账号库或热会话迁移未经验证。
 
-## 已验证的范围
+## 0.6.90-dsh022.2 的历史验收范围
 
 | 场景 | 方法与结果 |
 | --- | --- |

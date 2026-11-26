@@ -58,7 +58,7 @@ Resolution order (highest first): `DSH_AGY_*` environment variable → runtime o
 | --- | --- | --- | --- |
 | `contextWindowDefault` | `DSH_AGY_CONTEXT_WINDOW` | `1048576` | Context window advertised when agy does not report one |
 | `maxTokensDefault` | `DSH_AGY_MAX_TOKENS` | `65536` | Max output tokens advertised when agy does not report one |
-| `forwardSystemPrompt` | `—` | `true` | Forward the DSH system prompt to agy |
+| `forwardSystemPrompt` | `—` | `true` | Forward the current DSH system prompt and latest producer snapshots to agy on each chat turn, including resumed sessions |
 | `digestMaxChars` | `—` | `8000` | Budget for the history digest sent each turn |
 | `contextTransferMaxChars` | `—` | `660000` | Character cap for the transferred context block |
 | `contextTransferMaxBytes` | `—` | `150000` | Byte cap for the transferred context block |
@@ -82,7 +82,7 @@ Resolution order (highest first): `DSH_AGY_*` environment variable → runtime o
 | Key | Environment | Default | Description |
 | --- | --- | --- | --- |
 | `askTool` | `—` | `false` | Expose the `agy_ask` delegation tool |
-| `mcpBridge` | `DSH_AGY_MCP_BRIDGE` | `false` | Enable the reverse MCP server for DSH tools in the active session step |
+| `mcpBridge` | `DSH_AGY_MCP_BRIDGE` | `false` | Expose the current DSH model step’s tools to agy. Requires a host that supplies the 0.2.2 step tool set. Without a bound step the bridge advertises no tools. |
 | `mcpBridgeScope` | `DSH_AGY_MCP_BRIDGE_SCOPE` | `all` | `all` exposes the admitted tools. `host-only` omits basic file and terminal tools such as `read`, `edit` and `bash`. Both respect `mcpToolAllowlist` and keep the host-projected PTC executor `run_code` if allowed. Set the scope in Settings → Runtime controls or the plugin config. |
 | `mcpConfigScope` | `DSH_AGY_MCP_CONFIG_SCOPE` | `global` | `global` / `workspace` / `both` |
 | `mcpConfigPath` | `DSH_AGY_MCP_CONFIG_PATH` | `''` | Explicit agy MCP config path |

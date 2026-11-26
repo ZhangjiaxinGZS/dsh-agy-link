@@ -1,3 +1,4 @@
+import type { BridgeLease } from '../common/protocol.ts'
 import { randomBytes } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
@@ -91,4 +92,12 @@ export function enterHostStep(ctx: Context, steps: BridgeSteps, options: Paramet
   const agents = ctx.get('agents') as { get(id: unknown): object | undefined } | undefined
   const lease = steps.enter(agents?.get(options.sessionId), options)
   return lease && { ...lease, serverName }
+}
+
+export async function* withBridgeStep<T>(lease: BridgeLease | undefined, run: (lease?: BridgeLease) => AsyncIterable<T>) {
+  try {
+    yield* run(lease)
+  } finally {
+    lease?.close()
+  }
 }

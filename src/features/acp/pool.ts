@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto'
-// Pool of warm persistent `agy acp` processes keyed by account/mode/sandbox/agent.
 import type { PermissionMode, PluginConfig } from '../../common/types.ts'
 import { slotGuardStats } from '../../domain/credentials/guards.ts'
 import { AcpProcess, type AcpProcessOptions } from './client.ts'
@@ -138,9 +137,9 @@ export class AcpSessionPool {
     }
   }
 
-  private keyFor(opts: { env?: NodeJS.ProcessEnv; accountId?: string; mode: PermissionMode; sandbox: boolean; agent: string }): string {
+  private keyFor(opts: { env?: NodeJS.ProcessEnv; accountId?: string; mode: PermissionMode; sandbox: boolean; agent: string; settingsTag?: string }): string {
     const scope = opts.env?.DSH_MCP_ROUTE
-    const base = `${opts.accountId || 'primary'}|${opts.mode}|${opts.sandbox ? '1' : '0'}|${opts.agent}`
+    const base = `${opts.accountId || 'primary'}|${opts.mode}|${opts.sandbox ? '1' : '0'}|${opts.agent}|${opts.settingsTag ?? ''}`
     return scope ? base + '|scope:' + createHash('sha256').update(scope).digest('hex') : base
   }
 
@@ -196,6 +195,7 @@ export class AcpSessionPool {
     expectedIsolated?: boolean
     /** True when this process depends on the shared Windows Credential Manager slot (legacy agy < 1.5). */
     usesSharedSlot?: boolean
+    settingsTag?: string // different startup settings must not reuse this process
   }): AcpProcess {
     if (process.platform === 'win32' && req.usesSharedSlot === true) {
       this.evictOtherAccounts(req.accountId)
@@ -257,7 +257,7 @@ export class AcpSessionPool {
     let oldestAny: string | null = null
     let oldestAnyAt = Infinity
     for (const [k, p] of this.procs) {
-      if (k.includes('|scope:') || p.isBusy) continue // mid-turn, never a victim
+      if (k.includes('|scope:') || p.isBusy) continue // Preserve session-bound bridge routes and in-flight turns.
       if (p.lastUsedAt < oldestAnyAt) {
         oldestAnyAt = p.lastUsedAt
         oldestAny = k

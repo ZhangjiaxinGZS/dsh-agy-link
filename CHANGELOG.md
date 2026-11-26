@@ -1,5 +1,134 @@
 # Changelog
 
+## 0.6.96-dsh022.1 (2026-11-26)
+
+- Sync upstream 0.6.96 and retain the DSH 0.2.2 fork defaults for forwarding host instructions. Add host-only reverse MCP scope, explicit routing for tool-name collisions, and host-tool diagnostics.
+
+## 0.6.96 (2026-11-26)
+
+### English
+
+- **Fix(client): the console no longer flashes while it scrolls.** Sixth report of the same symptom; the overlay itself had been isolated long ago, so the remaining per-frame work was work the console generated itself:
+  - decorative animation kept running inside the scrolling subtree (quota shimmer, progress transitions), forcing a compositor repaint every frame — it is now paused for the whole `.agy-modal-panel` subtree for the duration of the gesture, via `html.agy-scrolling` owned by `scroll-guard` (the first cut only paused `.agy-modal-body`; the reporter confirmed the residual flash was the **panel content** — the header's spinner and status chips repaint the same layer the scroller moves in);
+  - the 3s `/status` poll re-rendered the whole console tree whenever it landed mid-scroll. The snapshot is still stored immediately; only listener notification waits for the scroll to settle;
+  - a second signal, `onScrollIdle()`, resumes the overlay's own deferred updates when the gesture ends, whether or not an overlay is open — otherwise scrolling inside the console froze its live readouts until it was closed. The deferred flush re-subscribes on demand, so a client teardown/reload cannot leave the console permanently stale;
+  - the overlay stylesheet moved to `src/client/modal-css.ts` (`global-css.ts` was at the 600-line budget ceiling).
+- **Fix(quota): one Gemini bucket when upstream merges Argon into the group.** agy 1.5.15+ reports the merged Gemini pool under **both** keys: the group description lists "Gemini 4 Argon" as a member, and the same physical bucket is written again as `quotas.argon`. `argonSharesGoogleGroup()` required `quotas.argon` to be *absent*, so the primary account was classified as two independent ledgers and its card grew a phantom "Argon 0%" row plus a second cooldown badge. The group's own membership list is now the only authoritative signal; a group that does not list Argon keeps its own row.
+- **Tests: the suite is partitioned into domain directories mirroring `src/`** (`test/<domain>/`), the three largest suites are split by behaviour, and `scripts/fast-test.mjs` maps changed source files to their domain suites for the inner TDD loop. See `test/README.md`.
+- **Merge: `origin/main` v0.6.95 reconciled with the partitioned tree.** Upstream's additions made on the old flat paths were carried into the split files (the #207 Stop+Retry test, the `/status` `availableCommands` assertion, the router CSRF gate test) and its three new suites moved into their domain directories. `.spec/security-hardening.md` now describes the live step-route contract (`X-DSH-Route`); the invariants that still hold were kept, with test anchors rewritten to the new paths.
+
+### 中文
+
+- **修复(客户端)：控制台滚动时不再闪烁。** 同一症状的第六次报告；遮罩层本身早已隔离，剩下的每帧开销是控制台自己产生的：
+  - 装饰性动画在滚动子树内持续运行（配额微光、进度过渡），迫使合成器每帧重绘——现在通过 `scroll-guard` 维护的 `html.agy-scrolling`，在整个手势期间暂停**整个 `.agy-modal-panel` 子树**的动画（第一版只暂停了 `.agy-modal-body`；报告者确认残留闪烁的是**面板内容**——头部的加载指示与状态标签和滚动器重绘同一层）；
+  - 3 秒一次的 `/status` 轮询若恰好落在滚动中，会重渲染整棵控制台树。快照仍立即存储，只有监听器通知会等滚动稳定；
+  - 新增第二个信号 `onScrollIdle()`：手势结束时恢复遮罩层自身被推迟的更新，无论遮罩是否打开——否则在控制台内滚动会让实时读数冻结，直到关闭控制台。被推迟的刷新会在需要时重新订阅，客户端 teardown/重载后不会永久停留在旧快照。
+  - 遮罩层样式表移到 `src/client/modal-css.ts`（`global-css.ts` 已到 600 行预算上限）。
+- **修复(配额)：上游把 Argon 并入同一分组时只算一个 Gemini 桶。** agy 1.5.15+ 会在**两个**键下报告同一个合并后的 Gemini 池：分组描述把 "Gemini 4 Argon" 列为成员，同一物理桶又被重复写成 `quotas.argon`。`argonSharesGoogleGroup()` 之前要求 `quotas.argon` **不存在**，于是主账号被判定为两个独立账本，卡片上多出一行幽灵 "Argon 0%" 和第二个冷却标签。现在分组自身的成员列表是唯一权威信号；未列出 Argon 的分组仍保留自己的行。
+- **测试：测试套件按领域分目录，镜像 `src/` 分层**（`test/<domain>/`），三个最大的套件按行为拆分，`scripts/fast-test.mjs` 把变更的源文件映射到对应领域的测试以内环 TDD 运行。见 `test/README.md`。
+- **合并：`origin/main` v0.6.95 与分目录后的树完成合并。** 上游在旧扁平路径上做的增量已带进拆分后的文件（#207 Stop+Retry 测试、`/status` 的 `availableCommands` 断言、路由 CSRF 门禁测试），其三个新套件移入各自的领域目录。`.spec/security-hardening.md` 现在描述的是现行的步骤路由契约（`X-DSH-Route`）；仍然成立的不变式予以保留，测试锚点改写为新路径。
+
+## 0.6.95 (2026-11-26)
+
+### English
+
+- **Feat(pool): prefer the account with the fewest exclusive capabilities (merges PR #211).** Some accounts can only run `gemini-4-hydrogen` while others can run both `4h` and `gemini-4-neon`, and the two share one quota bucket. Rotation looked only at reset time, so a `4h` request could burn a dual-capability account and leave `4n` with nothing.
+  - One rule: **give the request to the account that other models need least.** `exclusiveCapabilityScores` counts, per candidate, the models it supports that not every candidate supports (from `quotas[family].models`, base slugs with the effort suffix stripped). Models every candidate shares cancel out; accounts that report no model list score 0.
+  - `orderByExpiry` gains a Priority 0 layer (fewest exclusive capabilities first); **within the same layer the order is unchanged**.
+  - Stickiness: the current account keeps the turn only while it is in the narrowest layer, otherwise a narrower account takes over — at selection time only, never interrupting an in-flight request.
+  - No configuration, no labels, no hard-coded model names; applies to other capability groups (Argon, …) too.
+
+### 中文
+
+- **特性(账号池)：优先使用"独占能力最少"的账号（合并 PR #211）。** 部分账号只能跑 `gemini-4-hydrogen`，另一部分 `4h` 与 `gemini-4-neon` 都能跑，而两者共用一个额度。原轮换只看重置时间，于是 `4h` 请求可能先烧掉双能力账号，之后 `4n` 无号可用。
+  - 一条规则：**把请求交给别的模型最不需要的账号。** `exclusiveCapabilityScores` 统计每个候选账号"支持、但并非所有候选都支持"的模型数（来自 `quotas[family].models`，按 base slug 去 effort 后缀）。所有候选共有的模型相互抵消；未上报模型列表的账号记 0。
+  - `orderByExpiry` 在原有排序前增加 Priority 0 层（独有能力少的优先）；**同层内顺序与原来完全一致**。
+  - 粘性：当前账号只在"最窄层"内时保持，否则让位给更窄的账号——仅发生在选号时，不中断进行中的请求。
+  - 无配置、无标签、不硬编码模型名；对 Argon 等其他能力组合同样适用。
+
+## 0.6.94 (2026-11-26)
+
+### English
+
+- **Fix(client): eliminate O(N) DOM MutationObserver rescanning & `/status` bloat.**
+  - `src/client/compaction.ts`, `mermaid-render.ts`, `decisions.ts`, and `images/scanner.ts` now stamp non-matching `<p>` elements, known non-mermaid `.md-code-block` nodes (before reading `textContent`), already-scanned markdown containers, and settled image-alt containers so large session histories no longer trigger full-DOM re-scans on every mutation.
+  - Omit `availableCommands` from HTTP `/status` (`acpStatus`) to stop serializing 20 KB+ of skill descriptions on every 3s console poll.
+- **Fix(quota): stop background pool sweeps from locking the manual refresh UI and skip workspace MCP startup in `/usage`.**
+  - `QuotaService.refreshAccountQuota` now only populates `refreshingAccounts()` for manual (`force === true`) refreshes so unattended serial startup/background sweeps no longer lock the console button as `刷新中` / `同步中`.
+  - `readAgyUsage` spawns `agy -p /usage` with `cwd: tmpdir()` so project-local config never triggers unnecessary startup overhead.
+- **Fix(btw): grant read-only tool permissions for `/atw` side questions.** `BtwService` now passes `mode: 'default'` with `disableSlashCommands: true` and an explicit read-only `--settings` permission profile (`BTW_READ_ONLY_PERMISSIONS`, denying mutating tools), resolving `warning: --mode plan has no effect while slash command expansion is disabled` and `read_file` auto-denial in headless `agy 1.5.x`.
+- **Fix(mcp): keep reverse MCP call IDs unique across bridge restarts (PR #209 by @ZhangjiaxinGZS).** Replaced incrementing `callSeq` with `randomUUID()` (`'agy-mcp-' + randomUUID()`) in `src/host/mcp-bridge.ts`.
+- **Fix(usage): emit bucket-consistent zero-delta usage on concurrent tool cuts (Issue #210).** `RunRecording` remembers `lastEmittedUsageBuckets` (`cacheRead` / `cacheWrite`) and exposes `zeroDeltaUsageForCut()`, wired through `EventMapper` into `buildToolCallBlock` so parallel tool cuts `2..N` emit zero-delta `{ type: 'usage' }` chunks matching prior cache bucket presence while preserving strict 1x token totals and leaving `emitFailure()` sample-free when no measurement exists.
+- **Fix(security,credentials,acp,rotation): address verified Issue #207 P0 & P1 bugs.**
+  - **Cross-process slot lock (`src/domain/credentials/lock.ts`)**: stop falling through on live non-stale locks and acquire with exclusive `flag: 'wx'` instead of `renameSync` overwrite.
+  - **HTTP CSRF & `/open` hardening (`src/host/media-route.ts`, `src/transport/http/router.ts`, `src/transport/http/routes/media.ts`)**: block `Origin: null` and `file://` in `isCrossOriginBlocked` while allowing `dsh-app://`; gate all state-mutating POST routes (except `/open` & `/lease*` which enforce their own envelopes); block executable extensions (`DANGEROUS_OPEN_EXTS`) on `handleOpenFile` unless `reveal=1`; exclude `Downloads` and `tmpdir()` from default `/open` workspace roots.
+  - **ACP cancel & Stop+Retry race**: `acpPromptResultToAgyEvent` treats `cancelled`/`canceled` `stopReason` as `ok = false`; `runAcpPrompt` skips `shouldSelfHealAcpResult` and settles aborted when cancelled instead of `failure: null` overwriting `binding.interrupted`; `RunRecording` tracks `isAbortRequested` so rapid Stop + Retry waits cleanly for the dying run instead of colliding or throwing `Err.BUSY`.
+  - **Pool/Account/Cleanup**: fire `onAccountUsed` on settled non-aux ACP turns; clear removed Orchestrator seats on disk in `prepareOrchestratorSettingsForAcp` / `syncOrchestratorSettingsFileAt`; enforce `quotaModel`/`avoidAccountIds`/`quotaClear` on `win32 + parallelSameAccount`; detect `parseModelNotRecognized` on `Err.PROCESS_EXIT`/`Err.AGY_ERROR` without double-marking in `retry-policy.ts`; dispose `quotaRefresher` on plugin teardown.
+
+### 中文
+
+- **修复(client)：消除 DOM MutationObserver 全量 O(N) 重复扫描与 `/status` 冗余序列化。**
+  - `compaction.ts`、`mermaid-render.ts`、`decisions.ts` 与 `images/scanner.ts` 分别为未命中 `<p>`、已知非 mermaid 代码块（读取 `textContent` 前）、已扫描 Markdown 容器与已稳定图片容器打标跳过，大幅降低长会话历史切换与加载时的渲染进程阻塞。
+  - 从 HTTP `/status`（`acpStatus`）移除约 20 KB 的技能描述列表 `availableCommands`，减轻每 3 秒轮询体积。
+- **修复(quota)：后台串联刷新不再锁死控制台刷新按钮，`/usage` 改在临时目录启动。**
+  - `QuotaService.refreshAccountQuota` 仅在手动刷新（`force === true`）时写入 `refreshingAccounts()`，避免启动 5 秒后的后台串口巡检把按钮与卡片长时间锁在 `刷新中` / `同步中`。
+  - `readAgyUsage` 在 `tmpdir()` 下运行 `agy -p /usage`。
+- **修复(btw)：修复 `/atw` 旁路提问因 `--mode plan` 与 `--disable-slash-commands` 冲突导致的只读权限被拒。** 改为 `mode: 'default'` + `disableSlashCommands: true` + 显式只读 `--settings` 权限配置（`BTW_READ_ONLY_PERMISSIONS`，拒绝写操作与命令执行）。
+- **修复(mcp)：保证桥接重启后反向 MCP `callId` 全局唯一（合并 PR #209，作者 @ZhangjiaxinGZS）。** 使用 `randomUUID()` 替代重启清零的 `callSeq` 计数器。
+- **修复(usage)：并发工具切分（cuts 2..N）补发桶结构一致的零增量 usage chunk（Issue #210）。** `RunRecording` 记录已发射的 `cacheRead`/`cacheWrite` 桶键并提供 `zeroDeltaUsageForCut()`，在不改变 1x 总量统计的前提下确保 DSH 回合 token 页脚与缓存桶校验完整，失败无采样场景保持不发射。
+- **修复(security,credentials,acp,rotation)：修复 Issue #207 已核实的 P0 与 P1 问题。**
+  - **跨进程凭据槽位锁**：修复未过期活锁误穿透覆盖问题，并用原子 `{ flag: 'wx' }` 替代 `renameSync` 抢占覆盖。
+  - **HTTP CSRF 与 `/open` 加固**：`isCrossOriginBlocked` 拒绝 `Origin: null` 与 `file://`、放行 `dsh-app://`；对所有写操作路由统一启用 Origin 校验；无 `reveal=1` 时拒绝直接打开可执行文件；`/open` 默认根目录移除 `Downloads` 与 `tmpdir()`。
+  - **ACP 取消自愈与 Stop+Retry 竞态**：ACP `cancelled` 不再触发自愈提示词或误以 `failure: null` 覆盖 `binding.interrupted`；`RunRecording` 记录 `isAbortRequested`，快速点击 Stop+Retry 时优雅等待旧进程收尾而不是碰撞或误报 `Err.BUSY`。
+  - **账号池与资源清理**：非 aux ACP 成功回合补发 `onAccountUsed`；Orchestrator 清空席位时清理 `settings.json` 中已移除角色键；Windows `parallelSameAccount` 分支严格尊重 `quotaModel`/`quotaClear`；`Err.PROCESS_EXIT`/`Err.AGY_ERROR` 识别未支持模型后不再被 `retry-policy.ts` 二次误标下一账号；插件卸载时调用 `quotaRefresher.dispose()`。
+
+## 0.6.93 (2026-11-25)
+
+### English
+
+- **Fix(mcp): bind reverse-MCP discovery and execution to the model step that started the call (merges PR #208).** Two failures showed up when team sessions ran concurrently:
+  - the host projects its model-facing catalog into `GenerateOptions.tools`; rebuilding that catalog from the global registry could hide PTC's `run_code` or advertise tools the model could not execute, so dispatch without the step's `toolSet` answered "unknown tool" for an admitted team tool;
+  - associating an ACP process with its most recent session made overlapping calls ambiguous — the same class of problem as #200's `DSH_MCP_SESSION` staleness.
+  The bridge now uses the **projected schemas** for discovery and the **originating agent, admitted tool set and cancellation signal** for execution. The process-level association (`acp/mcp-session.ts`) is deleted rather than repaired, which removes the ambiguity instead of narrowing it.
+  - Also covered: pending teammate reports leaking into the history digest and the live request, a warm session retaining outdated system instructions, and a previous turn's screenshot being staged again.
+
+### 中文
+
+- **修复(mcp)：把反向 MCP 的发现与执行绑定到**发起调用的那个 model step**（合并 PR #208）。** 团队会话并发时暴露了两类失败：
+  - 宿主会把面向模型的目录投影进 `GenerateOptions.tools`；若改从全局注册表重建，可能藏掉 PTC 的 `run_code`，或列出模型无法执行的工具——于是在没有该 step 的 `toolSet` 时派发，会对本已准入的团队工具回"unknown tool"；
+  - 把 ACP 进程与"最近一次会话"关联，会让重叠调用变得歧义——这与 #200 的 `DSH_MCP_SESSION` 陈旧是同一类问题。
+  现在桥接用**投影后的 schema** 做发现，用**发起方 agent、准入工具集与取消信号**做执行。进程级关联（`acp/mcp-session.ts`）被**删除**而不是修补，从根上消除歧义，而不是收窄它。
+  - 一并覆盖：待处理的同侪报告泄漏进历史摘要与实时请求、热会话保留过期的系统指令、上一轮的截图被再次 staging。
+
+## Unreleased
+
+- Bind reverse MCP discovery and execution to the active DSH model step and session, including PTC. Refresh opted-in system instructions on warm turns and keep pending messages and current images separate from recovery history.
+- 反向 MCP 桥按会话和当前步骤列出并执行工具，支持 PTC。启用系统提示词转发后，热会话也能收到更新；恢复历史时保留本轮待处理消息与图片的边界。
+
+## 0.6.92 (2026-11-25)
+
+### English
+
+- **Fix(provider): recognise `working-context` and DSH snapshot/catalog sources as harness context, so they no longer break a tool continuation (PR #206 by @hyh48).** `detectContinuation()` decides what it may skip by `isSyntheticHarnessMessage()`, whose source-kind list lagged DSH 0.2.2: a `[Working Context: …]` message (bare, preset-prefixed, or a custom `*-working-context`), a custom `form: 'snapshot' | 'catalog'` producer, or the built-in `working-directory` / `ptc-mode` / `repeat-tool-reminder` / `user-approval` kinds stopped the backward scan at a `role: 'user'` context message, so the tool result underneath looked like a new turn — the same preemption/abort loop as #205. The kinds are now a Set, custom presets are suffix-matched, and an arbitrary `[Working Context:` producer without a recognised kind is caught by a text fallback; actionable sources (`goal`, `schedule`, `webhook`, `subagent-settled`, `dsh-mnemon`, plugin notices) stay non-synthetic. Merged together with its regression suite (working-context hops, custom snapshot/catalog, actionable-source boundaries, live-run continuity).
+
+### 中文
+
+- **修复(provider)：把 `working-context` 与 DSH 的 snapshot/catalog 来源识别为 harness 上下文，不再打断工具续跑（PR #206，作者 @hyh48）。** `detectContinuation()` 依赖 `isSyntheticHarnessMessage()` 决定可跳过哪些消息，而后者的 source kind 列表落后于 DSH 0.2.2：`[Working Context: …]`（裸 kind、preset 前缀或自定义 `*-working-context`）、自定义 `form: 'snapshot' | 'catalog'` 生产者、以及内置 `working-directory` / `ptc-mode` / `repeat-tool-reminder` / `user-approval` 都会让反向扫描停在这条 `role: 'user'` 上下文消息上，底下的工具结果被当成新回合——与 #205 相同的抢占/取消循环。现在 kind 收敛为 Set，自定义 preset 用后缀匹配，无法识别 kind 但以 `[Working Context:` 开头的生产者由文本兜底识别；可执行来源（`goal`、`schedule`、`webhook`、`subagent-settled`、`dsh-mnemon`、插件通知）仍保持非 synthetic。连同其回归套件一起合并（working-context 续跑、自定义 snapshot/catalog、可执行来源边界、live run 连续性）。
+
+## 0.6.91 (2026-11-25)
+
+### English
+
+- **Fix(provider): a harness lifecycle hop must never preempt the run that produced it (issue #205).** Two independent paths caused the `!samePrompt` → `requestAbort()` cancel loop. (1) `detectContinuation()` stopped at a trailing `system`/`developer` message (mid-turn system-prompt / tool-registry refresh), so a tool result underneath looked like a fresh turn; those roles cannot be a human boundary and are now skipped. (2) The interruption notice injected on preemption was stored in the duplicate-debounce baseline, so the notice-free replay of the same hop compared unequal; `promptIdentity()` now canonicalises both sides and `hasNewHumanTask()` gates steer preemption — no new typed (or media) turn means resume the cut span (`lastCutIndex + 1`) instead of aborting, and BUSY only when nothing has been cut yet.
+- **Feat(orchestrator): role whitelists and resident-ACP settings (issue #204).** The Planner/Executor dropdowns now filter by agy's own `orchestrator-model-roles` (verified in the 1.5.15 binary: planner = Neon/Carbon/Argon/Opus 5.5, executor = Hydrogen/Sonnet 5.5); a configured out-of-list value still renders so the control never lies. ACP has no `--settings`, so a customized orchestrator previously forced the batch CLI. It now stays on the resident ACP path: `prepareOrchestratorSettingsForAcp()` merges the payload into `<home>/.gemini/antigravity-cli/settings.json` (atomic, preserves unrelated keys, refuses to touch an unparsable file) and tags the ACP process key with the seats, so a server started under different seats is never reused; a failed merge falls back to CLI `-p --settings`. Free-form `agySettings` still use the CLI, because persisting them would outlive one call.
+- **Fix(credentials): complete the #203 envelope fix on the read paths that bypassed `parseCredentialDoc`.** `extractRefreshToken()` now unwraps `go-keyring-base64:` before matching, instead of returning the base64 blob as a "token"; the external-sign-in guard gained a regression test that feeds it a wrapped foreign grant. No behaviour change for plain JSON writers.
+
+### 中文
+
+- **修复(provider)：Harness 生命周期消息不得抢占产生它的运行（issue #205）。** 两条独立路径共同造成 `!samePrompt` → `requestAbort()` 取消循环：① `detectContinuation()` 遇到尾部 `system`/`developer` 消息（回合中的 system-prompt / tool-registry 刷新）就停止，底下的工具结果被当成新回合；这两种角色不可能是人类边界，现予跳过。② 抢占时注入的中断提示被写入去重基线，同一跳的无提示重放必然不等；`promptIdentity()` 现统一两侧规范形，`hasNewHumanTask()` 决定是否允许抢占——没有新的用户输入（文字或媒体）就沿 `lastCutIndex + 1` 续跑，只有尚未切出 span 时才 BUSY。
+- **特性(编排器)：角色白名单与常驻 ACP 设置（issue #204）。** Planner/Executor 下拉按 agy 自带 `orchestrator-model-roles` 过滤（1.5.15 二进制实测：planner = Neon/Carbon/Argon/Opus 5.5，executor = Hydrogen/Sonnet 5.5）；手配的白名单外值仍会显示，控件不撒谎。ACP 没有 `--settings`，此前自定义编排器只能绕开常驻 ACP 走 CLI。现在保留 ACP：`prepareOrchestratorSettingsForAcp()` 把 payload 原子合并进 `<home>/.gemini/antigravity-cli/settings.json`（保留无关字段，文件不可解析则放弃），并把 seats 作为 ACP 进程 key 的一部分（`settingsTag`），换过配置的旧进程永不被复用；合并失败回退 CLI `-p --settings`。用户自由 `agySettings` 仍走 CLI，避免把单次调用设置持久化到每个账号。
+- **修复(凭据)：补齐 #203 信封修复中绕过 `parseCredentialDoc` 的读取路径。** `extractRefreshToken()` 现在先解 `go-keyring-base64:` 再匹配，不再把 base64 串当 token 返回；外部登录守卫新增「信封包裹的外部 grant」回归用例。纯 JSON 写入方行为不变。
+
 ## 0.6.90-dsh022.2 (2026-11-25)
 
 - Give each reverse MCP call a unique ID across bridge restarts so persisted PTC dispatches can be replayed.
