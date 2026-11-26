@@ -44,6 +44,8 @@ export interface StatusPayload {
 	} | null;
 	backgroundWakeup?: boolean;
 	mcpBridge?: boolean;
+	mcpBridgeScope?: 'all' | 'host-only';
+	bridgeDiagnostic?: import('../common/bridge-tools.ts').BridgeDiagnostic | null;
 	imageTool?: boolean;
 	syncAccountCustomizations?: boolean;
 	workspaceRoot?: string;

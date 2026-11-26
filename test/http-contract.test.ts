@@ -2058,3 +2058,17 @@ test('issue #201: btwEnabled is settable (boolean) and reported by status', asyn
   const status = await s.call('/plugins/agy-link/status', fakeReq('GET', '/plugins/agy-link/status'))
   assert.ok('btwEnabled' in (status.json() as Record<string, unknown>), 'status must expose btwEnabled')
 })
+
+test('bridge scope validates settings writes and status reports the effective scope and diagnostic', async () => {
+  const writes: Array<[string, unknown]> = []
+  const bridgeDiagnostic = { hostTools: ['read_ticket'], disabledSettings: ['forwardSystemPrompt'] }
+  const s = setup({ setOverride: (k: string, v: unknown) => writes.push([k, v]),
+    adapter: { effortUnsupportedModels: () => [], bridgeDiagnostic } }, { mcpBridgeScope: 'host-only' })
+  const update = (value: unknown) => s.call('/plugins/agy-link/config', fakeReq('POST', '/', { key: 'mcpBridgeScope', value }))
+  for (const valid of ['all', 'host-only']) assert.equal((await update(valid)).status(), 200)
+  for (const invalid of [true, '', 'other']) assert.equal((await update(invalid)).status(), 400)
+  assert.deepEqual(writes, [['mcpBridgeScope', 'all'], ['mcpBridgeScope', 'host-only']])
+  const status = (await s.call('/plugins/agy-link/status', fakeReq('GET', '/'))).json() as Record<string, unknown>
+  assert.equal(status.mcpBridgeScope, 'host-only')
+  assert.deepEqual(status.bridgeDiagnostic, bridgeDiagnostic)
+})
